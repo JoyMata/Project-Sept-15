@@ -516,10 +516,19 @@
   .cal-cell.tdy{border-color:var(--green);color:var(--text);font-weight:700}
   .cal-cell.period{background:var(--lime);color:#1B1430;font-weight:700;box-shadow:0 0 10px rgba(255,79,160,.4)}
   .cal-cell.pred{border:1.5px dashed var(--lime);color:var(--lime);font-weight:600;background:rgba(255,79,160,.12)}
+  .cal-cell.fol{background:rgba(43,245,194,.10);color:var(--mint)}
+  .cal-cell.ovuw{background:rgba(43,245,194,.26);color:var(--mint);font-weight:700}
+  .cal-cell.lut{background:rgba(139,92,255,.12);color:var(--violet-soft)}
+  .cal-cell.pms{background:rgba(139,92,255,.30);color:#D9CBFF;font-weight:600}
   .cal-cell.ovu::after{
-    content:"";position:absolute;bottom:4px;left:50%;transform:translateX(-50%);
+    content:"";position:absolute;bottom:3px;left:50%;transform:translateX(-50%);
     width:5px;height:5px;border-radius:50%;background:var(--mint);
   }
+  .zone-row{display:flex;align-items:center;gap:10px;padding:8px 2px;border-bottom:1px solid var(--line);font-size:.82rem}
+  .zone-row:last-child{border-bottom:none}
+  .zone-row .zdot{width:11px;height:11px;border-radius:4px;flex-shrink:0}
+  .zone-row .zn{font-family:'Space Grotesk';font-weight:600;flex:1}
+  .zone-row .zr{color:var(--muted);font-size:.78rem}
   .cal-legend{display:flex;flex-wrap:wrap;gap:12px;margin-top:10px;font-size:.68rem;color:var(--muted)}
   .cal-legend span{display:inline-flex;align-items:center;gap:5px}
   .cal-legend i{width:11px;height:11px;border-radius:4px;display:inline-block}
@@ -755,7 +764,7 @@
     </div>
 
 
-    <h2 style="margin-top:4px">Cycle <span class="soft" id="cy-daylabel"></span></h2>    <h2>Cycle <span class="soft" id="cy-daylabel"></span></h2>
+    <h2 style="margin-top:4px">Cycle <span class="soft" id="cy-daylabel"></span></h2>
     <div class="dash" id="cycle-card">
       <div class="dash-top">
         <div class="kcal-ring">
@@ -789,18 +798,27 @@
       <div class="cal-legend">
         <span><i style="background:var(--lime)"></i> Period</span>
         <span><i style="border:1.5px dashed var(--lime);background:rgba(255,79,160,.12)"></i> Predicted</span>
-        <span><i style="background:var(--mint);border-radius:50%"></i> Est. ovulation</span>
+        <span><i style="background:rgba(43,245,194,.16)"></i> Follicular</span>
+        <span><i style="background:rgba(43,245,194,.4)"></i> Ovulation</span>
+        <span><i style="background:rgba(139,92,255,.18)"></i> Luteal</span>
+        <span><i style="background:rgba(139,92,255,.4)"></i> PMS</span>
         <span><i style="border:1.5px solid var(--green)"></i> Today</span>
       </div>
+    </div>
+    <div class="card" id="cy-zones-card" style="display:none">
+      <h2 style="font-size:.95rem;margin-bottom:6px" id="cy-zones-title">This cycle</h2>
+      <div id="cy-zones"></div>
     </div>
     <div class="card">
       <div class="grid2">
         <div class="field"><label>Last period started</label><input id="cy-date" type="date"></div>
-        <div class="field"><label>Cycle length (days)</label><input id="cy-len" type="number" inputmode="numeric" placeholder="28"></div>
+        <div class="field"><label>Last period ended</label><input id="cy-end" type="date"></div>
       </div>
+      <div class="field"><label>Cycle length (days)</label><input id="cy-len" type="number" inputmode="numeric" placeholder="28"></div>
       <div style="display:flex;gap:10px">
         <button class="btn" id="cy-save">Save</button>
         <button class="btn" id="cy-startnow" style="background:var(--card-2);color:var(--lime);border:1px solid var(--line)">Period started today</button>
+        <button class="btn" id="cy-endnow" style="background:var(--card-2);color:var(--mint);border:1px solid var(--line);display:none">Period ended today</button>
       </div>
     </div>
 
@@ -988,7 +1006,7 @@ const BADGES = [
 ];
 
 /* =================== STATE =================== */
-let state = { habits:{}, workouts:{}, checkins:[], food:{}, badges:{}, steps:{}, rides:[], cycle:{starts:[], len:28} };
+let state = { habits:{}, workouts:{}, checkins:[], food:{}, badges:{}, steps:{}, rides:[], cycle:{starts:[], ends:[], len:28} };
 
 // Storage adapter: uses Claude's artifact storage when running inside Claude,
 // otherwise the phone browser's own storage (e.g. opened from GitHub Pages /
@@ -1043,7 +1061,8 @@ async function loadState(){
   if(!state.badges) state.badges = {};
   if(!state.steps) state.steps = {};
   if(!state.rides) state.rides = [];
-  if(!state.cycle) state.cycle = {starts:[], len:28};
+  if(!state.cycle) state.cycle = {starts:[], ends:[], len:28};
+  if(!state.cycle.ends) state.cycle.ends = [];
 }
 let saveTimer = null;
 function saveState(){
@@ -1525,6 +1544,26 @@ function renderRiding(){
 }
 
 /* =================== CYCLE =================== */
+function periodEndFor(startKey){
+  // first logged end that falls on/after this start, within 12 days
+  const s = new Date(startKey+"T12:00:00");
+  const ends = [...state.cycle.ends].sort();
+  for(const e of ends){
+    const d = Math.round((new Date(e+"T12:00:00") - s)/86400000);
+    if(d >= 0 && d <= 12) return e;
+  }
+  return null;
+}
+function periodLenFor(startKey){
+  const e = periodEndFor(startKey);
+  if(!e) return null;
+  return Math.round((new Date(e+"T12:00:00") - new Date(startKey+"T12:00:00"))/86400000) + 1;
+}
+function avgPeriodLen(){
+  const lens = state.cycle.starts.map(periodLenFor).filter(Boolean).slice(-4);
+  if(!lens.length) return 5;
+  return Math.min(10, Math.max(2, Math.round(lens.reduce((a,b)=>a+b,0)/lens.length)));
+}
 function cycleAvgLen(){
   const s = state.cycle.starts;
   if(s.length >= 2){
@@ -1548,8 +1587,9 @@ function cycleInfo(){
   const len = cycleAvgLen();
   const day = Math.floor((new Date() - new Date(last+"T12:00:00"))/86400000) + 1;
   const ovu = Math.max(10, len - 14);
+  const pLen = periodLenFor(last) || avgPeriodLen();
   let phase, col, note;
-  if(day <= 5){
+  if(day <= pLen){
     phase = "Menstrual"; col = "var(--red)";
     note = "Energy is usually lowest in these days. A session at 70% still counts — swap intensity for movement if you need to, keep protein and iron up (the carne molida option helps), and don't read anything into this week's scale.";
   } else if(day < ovu - 1){
@@ -1574,6 +1614,7 @@ function renderCycle(){
   const strip = document.getElementById("cycle-today");
   if(!info){
     document.getElementById("cy-daylabel").textContent = "— log your last period to start";
+    document.getElementById("cy-zones-card").style.display = "none";
     strip.style.display = "none";
     return;
   }
@@ -1590,7 +1631,16 @@ function renderCycle(){
 
   // Today tab strip
   strip.style.display = "block";
+  // contextual quick buttons: show "ended today" while on period, "started today" otherwise
+  const lastStart = [...state.cycle.starts].sort().pop();
+  const onPeriod = info.day <= 10 && !periodEndFor(lastStart);
+  document.getElementById("cy-startnow").style.display = onPeriod ? "none" : "block";
+  document.getElementById("cy-endnow").style.display = onPeriod ? "block" : "none";
+  const lastEnd = periodEndFor(lastStart);
+  if(lastEnd) document.getElementById("cy-end").value = lastEnd;
+
   renderCal();
+  renderZones();
   strip.innerHTML = "<b style='color:"+info.col+"'>Cycle day "+info.day+" · "+info.phase+"</b> — " +
     (info.phase === "Follicular" ? "push day: great time to go for more." :
      info.phase === "Ovulation" ? "peak energy — warm up well, then fly." :
@@ -1612,17 +1662,29 @@ function renderCal(){
   const last = [...s].sort().pop();
   const lastD = new Date(last+"T12:00:00");
 
-  // build mark maps
+  // phase map for every day from the last logged period through 3 predicted cycles
   const period = new Set(), pred = new Set(), ovu = new Set();
+  const phase = {}; // dateKey -> fol | ovuw | lut | pms
+  const avgP = avgPeriodLen();
   s.forEach(st=>{
+    const n = periodLenFor(st) || avgP;
     const d = new Date(st+"T12:00:00");
-    for(let i=0;i<5;i++){ period.add(dateKeyOf(d)); d.setDate(d.getDate()+1); }
+    for(let i=0;i<n;i++){ period.add(dateKeyOf(d)); d.setDate(d.getDate()+1); }
   });
-  for(let c=1;c<=3;c++){
+  const ovuDay = Math.max(10, len - 14);
+  const curP = periodLenFor(last) || avgP;
+  for(let c=0;c<=3;c++){
     const start = new Date(lastD); start.setDate(start.getDate() + len*c);
-    const o = new Date(start); o.setDate(o.getDate()-14);
-    ovu.add(dateKeyOf(o));
-    for(let i=0;i<5;i++){ pred.add(dateKeyOf(start)); start.setDate(start.getDate()+1); }
+    const pn = c === 0 ? curP : avgP;
+    for(let d=1; d<=len; d++){
+      const dt = new Date(start); dt.setDate(dt.getDate() + d - 1);
+      const k = dateKeyOf(dt);
+      if(d <= pn){ if(c > 0) pred.add(k); }
+      else if(d < ovuDay - 1){ phase[k] = "fol"; }
+      else if(d <= ovuDay + 1){ phase[k] = "ovuw"; if(d === ovuDay) ovu.add(k); }
+      else if(d <= len - 5){ phase[k] = "lut"; }
+      else { phase[k] = "pms"; }
+    }
   }
 
   const now = new Date();
@@ -1643,7 +1705,7 @@ function renderCal(){
     const k = dateKeyOf(dt);
     const c = document.createElement("div");
     c.className = "cal-cell"
-      + (period.has(k) ? " period" : pred.has(k) ? " pred" : "")
+      + (period.has(k) ? " period" : pred.has(k) ? " pred" : (phase[k] ? " " + phase[k] : ""))
       + (ovu.has(k) && !period.has(k) ? " ovu" : "")
       + (k === tk ? " tdy" : "");
     c.textContent = d;
@@ -1652,6 +1714,63 @@ function renderCal(){
 }
 document.getElementById("cal-prev").onclick = ()=>{ calOffset--; renderCal(); };
 document.getElementById("cal-next").onclick = ()=>{ calOffset++; renderCal(); };
+
+
+/* --- zone map: date ranges for each phase --- */
+function fmtRange(a, b){
+  const opts = {day:"numeric", month:"short"};
+  const s1 = a.toLocaleDateString("en-GB", opts);
+  const s2 = b.toLocaleDateString("en-GB", opts);
+  return s1 === s2 ? s1 : s1 + " – " + s2;
+}
+function renderZones(){
+  const card = document.getElementById("cy-zones-card");
+  const s = state.cycle.starts;
+  if(!s.length){ card.style.display = "none"; return; }
+  card.style.display = "block";
+
+  const len = cycleAvgLen();
+  const last = new Date([...s].sort().pop() + "T12:00:00");
+  const dayNow = Math.floor((new Date() - last)/86400000) + 1;
+  // anchor on the cycle that contains today; if overdue, anchor on the predicted next
+  const cycleIdx = Math.max(0, Math.floor((dayNow - 1) / len));
+  const anchor = new Date(last); anchor.setDate(anchor.getDate() + len * cycleIdx);
+  document.getElementById("cy-zones-title").textContent =
+    cycleIdx === 0 ? "This cycle" : "Next cycle (predicted)";
+
+  const ovuDay = Math.max(10, len - 14);
+  const pLen = (cycleIdx === 0 ? periodLenFor(dateKeyOf(anchor)) : null) || avgPeriodLen();
+  const D = n => { const d = new Date(anchor); d.setDate(d.getDate() + n - 1); return d; };
+  const zones = [
+    { nm:"Period" + (cycleIdx > 0 ? " (predicted)" : ""), col:"var(--lime)",   a:D(1), b:D(pLen),
+      note:"lowest energy — gentle counts" },
+    { nm:"Follicular", col:"var(--mint)", a:D(pLen+1), b:D(ovuDay-2),
+      note:"push window — go for more" },
+    { nm:"Ovulation", col:"rgba(43,245,194,.9)", a:D(ovuDay-1), b:D(ovuDay+1),
+      note:"peak power — warm up well" },
+    { nm:"Luteal", col:"var(--violet)", a:D(ovuDay+2), b:D(len-5),
+      note:"steady — hold the routine" },
+    { nm:"PMS", col:"#B899FF", a:D(len-4), b:D(len),
+      note:"hunger up, scale noisy" }
+  ];
+  const box = document.getElementById("cy-zones");
+  box.innerHTML = "";
+  zones.forEach(z=>{
+    const row = document.createElement("div");
+    row.className = "zone-row";
+    row.innerHTML = '<span class="zdot" style="background:'+z.col+'"></span>'+
+      '<span class="zn">'+z.nm+'<div style="font-size:.7rem;color:var(--muted);font-weight:400">'+z.note+'</div></span>'+
+      '<span class="zr">'+fmtRange(z.a, z.b)+'</span>';
+    box.appendChild(row);
+  });
+  const nxt = new Date(anchor); nxt.setDate(nxt.getDate() + len);
+  const row = document.createElement("div");
+  row.className = "zone-row";
+  row.innerHTML = '<span class="zdot" style="background:var(--lime);opacity:.5"></span>'+
+    '<span class="zn">Next period</span>'+
+    '<span class="zr">~' + nxt.toLocaleDateString("en-GB",{day:"numeric",month:"short"}) + '</span>';
+  box.appendChild(row);
+}
 
 /* =================== STRETCHES =================== */
 const STRETCHES = [
@@ -1943,10 +2062,17 @@ document.getElementById("st-save").onclick = ()=>{
 /* cycle save */
 document.getElementById("cy-save").onclick = ()=>{
   const d = document.getElementById("cy-date").value;
+  const e = document.getElementById("cy-end").value;
   const len = parseInt(document.getElementById("cy-len").value,10);
   if(len && len >= 18 && len <= 45) state.cycle.len = len;
   if(d && !state.cycle.starts.includes(d)){ state.cycle.starts.push(d); state.cycle.starts.sort(); }
   if(!d && !state.cycle.starts.length){ toast("Add the date your last period started"); return; }
+  if(e){
+    const ref = d || [...state.cycle.starts].sort().pop();
+    const diff = Math.round((new Date(e+"T12:00:00") - new Date(ref+"T12:00:00"))/86400000);
+    if(diff < 0 || diff > 12){ toast("End date should be within ~12 days after the start"); return; }
+    if(!state.cycle.ends.includes(e)){ state.cycle.ends.push(e); state.cycle.ends.sort(); }
+  }
   saveState(); renderCycle(); renderProgress();
   toast("Cycle updated");
 };
@@ -1955,6 +2081,12 @@ document.getElementById("cy-startnow").onclick = ()=>{
   if(!state.cycle.starts.includes(tk)){ state.cycle.starts.push(tk); state.cycle.starts.sort(); }
   saveState(); renderCycle(); renderProgress();
   toast("Logged — take it easy these days 💗");
+};
+document.getElementById("cy-endnow").onclick = ()=>{
+  const tk = todayKey();
+  if(!state.cycle.ends.includes(tk)){ state.cycle.ends.push(tk); state.cycle.ends.sort(); }
+  saveState(); renderCycle(); renderProgress();
+  toast("Logged — welcome to the follicular power window ⚡");
 };
 
 /* ride save */
@@ -2028,9 +2160,9 @@ document.querySelectorAll("nav > button").forEach(b=>{
   document.getElementById("rd-date").value = todayKey();
   renderRideTypes();
   renderRiding();
-  // first run: prefill her last known period start so it's one tap to save
-  if(!state.cycle.starts.length) document.getElementById("cy-date").value = "2026-06-15";
-  else document.getElementById("cy-date").value = [...state.cycle.starts].sort().pop();
+  // first run: seed her last known period start so cycle + calendar show immediately
+  if(!state.cycle.starts.length){ state.cycle.starts = ["2026-06-15"]; saveState(); }
+  document.getElementById("cy-date").value = [...state.cycle.starts].sort().pop();
   document.getElementById("cy-len").value = state.cycle.len || 28;
   renderCycle();
   renderStretches();
